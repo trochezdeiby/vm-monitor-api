@@ -1,6 +1,7 @@
 """Capa de acceso a datos (SQLite)."""
 import sqlite3
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 
 from app.config import DB_PATH
 
@@ -13,7 +14,7 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Crea la tabla si no existe (se ejecuta al iniciar el servicio)."""
+    """Crea la tabla y el índice si no existen (se ejecuta al iniciar)."""
     with closing(get_conn()) as conn:
         with conn:  # commit automático
             conn.execute("""
@@ -26,6 +27,11 @@ def init_db() -> None:
                                                                   disk_percent REAL NOT NULL
                          )
                          """)
+            # El índice acelera las consultas por rango de fechas
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_created_at "
+                "ON snapshots (created_at)"
+            )
 
 
 def save_snapshot(m: dict, source: str) -> int:
@@ -39,3 +45,16 @@ def save_snapshot(m: dict, source: str) -> int:
                  m["ram_percent"], m["disk_percent"]),
             )
             return cur.lastrowid
+
+
+def purge_old(days: int) -> int:
+    """Borra las mediciones más antiguas que 'days' días. Devuelve cuántas."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+        timespec="seconds"
+    )
+    with closing(get_conn()) as conn:
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM snapshots WHERE created_at < ?", (cutoff,)
+            )
+            return cur.rowcount
